@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EV Station Optimizer — BMSCE</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    /* ── Reset & Base ────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:       #07080c;
+      --surface:  #0e1018;
+      --panel:    #13161f;
+      --border:   #1e2235;
+      --border2:  #252940;
+      --text:     #d4daf5;
+      --muted:    #5a6186;
+      --accent:   #e8ff47;
+      --gpu:      #ff6b35;
+      --cpu:      #4c9eff;
+      --green:    #36d399;
+      --mono:     'Space Mono', monospace;
+      --sans:     'Syne', sans-serif;
+    }
+    html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--sans); overflow-x: hidden; }
+
+    /* ── Scrollbar ───────────────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 4px; }
+
+    /* ── Layout ──────────────────────────────────────────────────── */
+    .shell { display: grid; grid-template-columns: 260px 1fr; grid-template-rows: auto 1fr; min-height: 100vh; }
+    .topbar { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between;
+      padding: 0 28px; height: 56px; border-bottom: 1px solid var(--border);
+      background: var(--surface); position: sticky; top: 0; z-index: 100; }
+    .topbar-brand { display: flex; align-items: center; gap: 12px; }
+    .topbar-brand .bolt { font-size: 22px; }
+    .topbar-brand .title { font-size: 15px; font-weight: 800; letter-spacing: -0.02em; color: var(--accent); }
+    .topbar-brand .sub { font-size: 11px; color: var(--muted); font-family: var(--mono); }
+    .topbar-meta { display: flex; gap: 16px; align-items: center; }
+    .pill { font-family: var(--mono); font-size: 10px; padding: 3px 10px; border-radius: 100px;
+      border: 1px solid var(--border2); color: var(--muted); }
+    .pill.live { border-color: var(--green); color: var(--green); }
+
+    /* ── Sidebar ─────────────────────────────────────────────────── */
+    aside { background: var(--surface); border-right: 1px solid var(--border);
+      padding: 24px 20px; display: flex; flex-direction: column; gap: 20px; overflow-y: auto; }
+    .sidebar-section { display: flex; flex-direction: column; gap: 12px; }
+    .sidebar-label { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+      color: var(--muted); font-family: var(--mono); padding-bottom: 6px;
+      border-bottom: 1px solid var(--border); }
+    .field { display: flex; flex-direction: column; gap: 6px; }
+    .field label { font-size: 12px; color: var(--muted); font-family: var(--mono); display: flex; justify-content: space-between; }
+    .field label span { color: var(--text); font-weight: 700; }
+    input[type="range"] {
+      width: 100%; height: 3px; appearance: none; background: var(--border2);
+      border-radius: 2px; outline: none; cursor: pointer;
+    }
+    input[type="range"]::-webkit-slider-thumb {
+      appearance: none; width: 14px; height: 14px; border-radius: 50%;
+      background: var(--accent); cursor: pointer; transition: transform 0.1s;
+    }
+    input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.25); }
+    .run-btn {
+      width: 100%; padding: 12px; background: var(--accent); color: var(--bg);
+      border: none; border-radius: 6px; font-family: var(--sans); font-size: 13px;
+      font-weight: 800; letter-spacing: 0.04em; cursor: pointer; transition: opacity 0.15s, transform 0.1s;
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+    }
+    .run-btn:hover { opacity: 0.9; }
+    .run-btn:active { transform: scale(0.98); }
+    .run-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .run-btn .spinner { display: none; width: 14px; height: 14px; border: 2px solid transparent;
+      border-top-color: var(--bg); border-radius: 50%; animation: spin 0.6s linear infinite; }
+    .run-btn.loading .spinner { display: block; }
+    .run-btn.loading .btn-text { display: none; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .caption-row { font-size: 10px; color: var(--muted); font-family: var(--mono); line-height: 1.7; }
+
+    /* ── Main content ────────────────────────────────────────────── */
+    main { overflow-y: auto; display: flex; flex-direction: column; gap: 0; }
+
+    /* ── Metrics strip ───────────────────────────────────────────── */
+    .metrics-strip { display: grid; grid-template-columns: repeat(4, 1fr);
+      border-bottom: 1px solid var(--border); }
+    .metric-cell { padding: 20px 24px; border-right: 1px solid var(--border); }
+    .metric-cell:last-child { border-right: none; }
+    .metric-cell .m-label { font-size: 10px; font-family: var(--mono); letter-spacing: 0.1em;
+      text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+    .metric-cell .m-value { font-size: 28px; font-weight: 800; letter-spacing: -0.03em; line-height: 1; }
+    .metric-cell .m-sub { font-size: 11px; font-family: var(--mono); color: var(--muted); margin-top: 4px; }
+    .m-value.accent { color: var(--accent); }
+    .m-value.gpu { color: var(--gpu); }
+    .m-value.cpu { color: var(--cpu); }
+    .m-value.green { color: var(--green); }
+
+    /* ── Content grid ────────────────────────────────────────────── */
+    .content-grid { display: grid; grid-template-columns: 1fr 380px; flex: 1; min-height: 0; }
+    .map-col { border-right: 1px solid var(--border); }
+    .side-col { display: flex; flex-direction: column; }
+
+    /* ── Map ─────────────────────────────────────────────────────── */
+    .map-header { padding: 16px 20px 12px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between; }
+    .panel-title { font-size: 12px; font-weight: 700; letter-spacing: 0.08em;
+      text-transform: uppercase; color: var(--muted); }
+    .legend-row { display: flex; gap: 12px; }
+    .legend-item { display: flex; align-items: center; gap: 5px; font-size: 10px;
+      font-family: var(--mono); color: var(--muted); }
+    .legend-dot { width: 8px; height: 8px; border-radius: 50%; }
+    #map { height: 440px; }
+    .leaflet-container { background: #0a0c14 !important; }
+
+    /* ── Charts column ───────────────────────────────────────────── */
+    .chart-block { padding: 16px 18px; border-bottom: 1px solid var(--border); }
+    .chart-block .panel-title { margin-bottom: 14px; }
+    .chart-wrap { position: relative; height: 160px; }
+
+    /* ── Tabs ─────────────────────────────────────────────────────── */
+    .tab-bar { display: flex; border-bottom: 1px solid var(--border); background: var(--surface); }
+    .tab-btn { flex: 1; padding: 12px 8px; font-size: 11px; font-family: var(--mono);
+      letter-spacing: 0.06em; text-transform: uppercase; background: none; border: none;
+      color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent;
+      transition: color 0.2s, border-color 0.2s; }
+    .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .tab-pane { display: none; }
+    .tab-pane.active { display: block; }
+
+    /* ── Table ───────────────────────────────────────────────────── */
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 11px; }
+    thead { background: var(--panel); }
+    th { padding: 10px 14px; text-align: left; font-size: 9px; letter-spacing: 0.1em;
+      text-transform: uppercase; color: var(--muted); font-weight: 400; white-space: nowrap; }
+    td { padding: 9px 14px; border-bottom: 1px solid var(--border); color: var(--text); white-space: nowrap; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: var(--panel); }
+    .tag { font-size: 9px; padding: 2px 7px; border-radius: 100px; font-family: var(--mono); font-weight: 700; }
+    .tag.fast { background: rgba(255,107,53,0.15); color: var(--gpu); border: 1px solid rgba(255,107,53,0.3); }
+    .tag.slow { background: rgba(76,158,255,0.12); color: var(--cpu); border: 1px solid rgba(76,158,255,0.3); }
+
+    /* ── Empty state ─────────────────────────────────────────────── */
+    .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center;
+      height: 120px; gap: 8px; color: var(--muted); }
+    .empty-state .icon { font-size: 28px; }
+    .empty-state p { font-size: 11px; font-family: var(--mono); }
+
+    /* ── Comparison tab ──────────────────────────────────────────── */
+    .compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--border); }
+    .compare-cell { background: var(--surface); padding: 14px 16px; }
+    .compare-cell .c-label { font-size: 9px; font-family: var(--mono); letter-spacing: 0.1em;
+      text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+    .compare-cell .c-val { font-size: 18px; font-weight: 800; }
+    .compare-cell .c-val.cpu { color: var(--cpu); }
+    .compare-cell .c-val.gpu { color: var(--gpu); }
+
+    /* ── Animate in ──────────────────────────────────────────────── */
+    @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    .fade-in { animation: fadeUp 0.35s ease both; }
+  </style>
+</head>
+<body>
+<div class="shell">
+
+  <!-- Topbar -->
+  <header class="topbar">
+    <div class="topbar-brand">
+      <span class="bolt">⚡</span>
+      <div>
+        <div class="title">EV STATION OPTIMIZER</div>
+        <div class="sub">CUDA-PSO · BMSCE · Prof. Swaroop B.M.</div>
+      </div>
+    </div>
+    <div class="topbar-meta">
+      <span class="pill">50 BBMP Wards</span>
+      <span class="pill">Haversine Fitness</span>
+      <span class="pill live" id="status-pill">READY</span>
+    </div>
+  </header>
+
+  <!-- Sidebar -->
+  <aside>
+    <div class="sidebar-section">
+      <div class="sidebar-label">PSO Parameters</div>
+      <div class="field">
+        <label>Swarm Size <span id="val-particles">50</span></label>
+        <input type="range" id="inp-particles" min="10" max="150" step="10" value="50" />
+      </div>
+      <div class="field">
+        <label>Max Iterations <span id="val-iter">80</span></label>
+        <input type="range" id="inp-iter" min="20" max="200" step="10" value="80" />
+      </div>
+      <div class="field">
+        <label>Stations to Place <span id="val-stations">6</span></label>
+        <input type="range" id="inp-stations" min="2" max="12" step="1" value="6" />
+      </div>
+      <div class="field">
+        <label>Demand Scale <span id="val-scale">1.0</span>×</label>
+        <input type="range" id="inp-scale" min="0.5" max="2.0" step="0.1" value="1.0" />
+      </div>
+    </div>
+
+    <button class="run-btn" id="run-btn">
+      <div class="spinner"></div>
+      <span class="btn-text">🚀 Run Optimization</span>
+    </button>
+
+    <div class="sidebar-section">
+      <div class="sidebar-label">Config</div>
+      <div class="caption-row">
+        Coverage radius: 3 km<br>
+        Grid cap: 150 kW/station<br>
+        Inertia: 0.9 → 0.4<br>
+        c₁ = c₂ = 1.5<br>
+        α=0.5  β=0.3  γ=0.2
+      </div>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-label">Fitness Formula</div>
+      <div class="caption-row">
+        f = α·(1−cov) + β·dist̄ + γ·overload<br><br>
+        <b style="color:var(--text)">Lower = Better</b>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <main>
+    <!-- Metrics strip -->
+    <div class="metrics-strip">
+      <div class="metric-cell">
+        <div class="m-label">CPU Time</div>
+        <div class="m-value cpu" id="m-cpu-time">—</div>
+        <div class="m-sub" id="m-cpu-fit">fitness: —</div>
+      </div>
+      <div class="metric-cell">
+        <div class="m-label">CUDA Time</div>
+        <div class="m-value gpu" id="m-cuda-time">—</div>
+        <div class="m-sub" id="m-cuda-fit">fitness: —</div>
+      </div>
+      <div class="metric-cell">
+        <div class="m-label">GPU Speedup</div>
+        <div class="m-value accent" id="m-speedup">—</div>
+        <div class="m-sub">vs CPU sequential</div>
+      </div>
+      <div class="metric-cell">
+        <div class="m-label">Fitness Gain</div>
+        <div class="m-value green" id="m-improvement">—</div>
+        <div class="m-sub" id="m-random">random baseline: —</div>
+      </div>
+    </div>
+
+    <!-- Map + Charts -->
+    <div class="content-grid">
+      <!-- Map -->
+      <div class="map-col">
+        <div class="map-header">
+          <span class="panel-title">GIS Map · Bangalore BBMP Wards</span>
+          <div class="legend-row">
+            <div class="legend-item"><div class="legend-dot" style="background:#4c9eff"></div>CPU PSO</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#ff6b35"></div>CUDA PSO</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#e8ff47;opacity:0.7"></div>Ward demand</div>
+          </div>
+        </div>
+        <div id="map"></div>
+      </div>
+
+      <!-- Right column: charts + tabs -->
+      <div class="side-col">
+        <!-- Convergence chart -->
+        <div class="chart-block">
+          <div class="panel-title">Convergence Curve</div>
+          <div class="chart-wrap">
+            <canvas id="chart-conv"></canvas>
+          </div>
+        </div>
+
+        <!-- Tabs: Design / Compare / Pareto -->
+        <div class="tab-bar">
+          <button class="tab-btn active" data-tab="design">Station Design</button>
+          <button class="tab-btn" data-tab="compare">Compare</button>
+        </div>
+
+        <div id="tab-design" class="tab-pane active">
+          <div id="design-content">
+            <div class="empty-state">
+              <div class="icon">🔋</div>
+              <p>Run optimization to see station design</p>
+            </div>
+          </div>
+        </div>
+
+        <div id="tab-compare" class="tab-pane">
+          <div id="compare-content">
+            <div class="empty-state">
+              <div class="icon">📊</div>
+              <p>Run optimization to compare methods</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+</div>
+
+<script>
+// ── Slider bindings ──────────────────────────────────────────────────────────
+const sliders = [
+  { inp: 'inp-particles', val: 'val-particles', fmt: v => v },
+  { inp: 'inp-iter',      val: 'val-iter',      fmt: v => v },
+  { inp: 'inp-stations',  val: 'val-stations',  fmt: v => v },
+  { inp: 'inp-scale',     val: 'val-scale',     fmt: v => parseFloat(v).toFixed(1) },
+];
+sliders.forEach(({ inp, val, fmt }) => {
+  const el = document.getElementById(inp);
+  const display = document.getElementById(val);
+  el.addEventListener('input', () => { display.textContent = fmt(el.value); });
+});
+
+// ── Map init ─────────────────────────────────────────────────────────────────
+const map = L.map('map', { zoomControl: true, attributionControl: false })
+  .setView([12.9716, 77.5946], 11);
+
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  maxZoom: 18
+}).addTo(map);
+
+let wardLayer = L.layerGroup().addTo(map);
+let stationLayer = L.layerGroup().addTo(map);
+
+// Load initial wards
+fetch('/api/wards').then(r => r.json()).then(data => {
+  renderWards(data.wards, null);
+});
+
+function demandColor(norm) {
+  const r = Math.round(232 * norm + 20);
+  const g = Math.round(255 * (1 - norm * 0.7));
+  const b = Math.round(71 * (1 - norm));
+  return `rgb(${r},${g},${b})`;
+}
+
+function renderWards(wards, maxDemand) {
+  wardLayer.clearLayers();
+  const mx = maxDemand || Math.max(...wards.map(w => w.demand));
+  wards.forEach(w => {
+    const norm = w.demand / mx;
+    L.circleMarker([w.lat, w.lon], {
+      radius: 5 + norm * 4,
+      color: demandColor(norm),
+      fillColor: demandColor(norm),
+      fillOpacity: 0.65,
+      weight: 0.5,
+    }).bindPopup(`<b>${w.name}</b><br>Demand: ${w.demand.toFixed(2)} kWh<br>Density: ${w.pop_density}/km²`)
+      .addTo(wardLayer);
+  });
+}
+
+function renderStations(stations, color, label) {
+  stations.forEach((s, i) => {
+    L.circleMarker([s.lat, s.lon], {
+      radius: 10,
+      color: color,
+      fillColor: color,
+      fillOpacity: 0.9,
+      weight: 2,
+    }).bindPopup(`<b>${label} Station ${i + 1}</b><br>${s.lat.toFixed(4)}, ${s.lon.toFixed(4)}`)
+      .addTo(stationLayer);
+
+    L.circle([s.lat, s.lon], {
+      radius: 3000,
+      color: color,
+      fillColor: color,
+      fillOpacity: 0.06,
+      weight: 1,
+    }).addTo(stationLayer);
+  });
+}
+
+// ── Convergence chart ─────────────────────────────────────────────────────────
+const convCtx = document.getElementById('chart-conv').getContext('2d');
+const convChart = new Chart(convCtx, {
+  type: 'line',
+  data: { labels: [], datasets: [
+    { label: 'CPU PSO', data: [], borderColor: '#4c9eff', borderWidth: 2,
+      pointRadius: 0, tension: 0.3, fill: false },
+    { label: 'CUDA PSO', data: [], borderColor: '#ff6b35', borderWidth: 2,
+      pointRadius: 0, tension: 0.3, fill: false },
+  ]},
+  options: {
+    responsive: true, maintainAspectRatio: false, animation: { duration: 400 },
+    scales: {
+      x: { ticks: { color: '#5a6186', font: { family: 'Space Mono', size: 9 }, maxTicksLimit: 8 },
+           grid: { color: '#1e2235' } },
+      y: { ticks: { color: '#5a6186', font: { family: 'Space Mono', size: 9 } },
+           grid: { color: '#1e2235' } },
+    },
+    plugins: {
+      legend: { labels: { color: '#d4daf5', font: { family: 'Space Mono', size: 10 }, boxWidth: 12 } },
+    },
+  },
+});
+
+// ── Tabs ──────────────────────────────────────────────────────────────────────
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+  });
+});
+
+// ── Run button ────────────────────────────────────────────────────────────────
+document.getElementById('run-btn').addEventListener('click', async () => {
+  const btn = document.getElementById('run-btn');
+  btn.classList.add('loading');
+  btn.disabled = true;
+  document.getElementById('status-pill').textContent = 'RUNNING…';
+  document.getElementById('status-pill').style.color = 'var(--accent)';
+  document.getElementById('status-pill').style.borderColor = 'var(--accent)';
+
+  const body = {
+    n_particles: parseInt(document.getElementById('inp-particles').value),
+    k_stations:  parseInt(document.getElementById('inp-stations').value),
+    max_iter:    parseInt(document.getElementById('inp-iter').value),
+    demand_scale: parseFloat(document.getElementById('inp-scale').value),
+    seed: 42,
+  };
+
+  try {
+    const res = await fetch('/api/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    renderResults(data);
+  } catch (e) {
+    document.getElementById('status-pill').textContent = 'ERROR';
+    document.getElementById('status-pill').style.color = '#ff4560';
+  } finally {
+    btn.classList.remove('loading');
+    btn.disabled = false;
+  }
+});
+
+function renderResults(data) {
+  const { metrics, history, stations, design, wards } = data;
+
+  // Metrics strip
+  document.getElementById('m-cpu-time').textContent  = metrics.t_cpu.toFixed(3) + 's';
+  document.getElementById('m-cuda-time').textContent = metrics.t_cuda.toFixed(3) + 's';
+  document.getElementById('m-speedup').textContent   = metrics.speedup.toFixed(2) + '×';
+  document.getElementById('m-improvement').textContent = (metrics.improvement >= 0 ? '+' : '') + metrics.improvement.toFixed(1) + '%';
+  document.getElementById('m-cpu-fit').textContent   = 'fitness: ' + metrics.fit_cpu.toFixed(5);
+  document.getElementById('m-cuda-fit').textContent  = 'fitness: ' + metrics.fit_cuda.toFixed(5);
+  document.getElementById('m-random').textContent    = 'random baseline: ' + metrics.fit_random.toFixed(5);
+
+  // Map
+  const maxDemand = Math.max(...wards.map(w => w.demand));
+  renderWards(wards, maxDemand);
+  stationLayer.clearLayers();
+  renderStations(stations.cpu,  '#4c9eff', 'CPU PSO');
+  renderStations(stations.cuda, '#ff6b35', 'CUDA PSO');
+
+  // Convergence chart
+  const labels = history.cpu.map((_, i) => i + 1);
+  convChart.data.labels = labels;
+  convChart.data.datasets[0].data = history.cpu;
+  convChart.data.datasets[1].data = history.cuda;
+  convChart.update();
+
+  // Station design tab
+  document.getElementById('design-content').innerHTML = `
+    <div class="table-wrap fade-in">
+      <table>
+        <thead><tr>
+          <th>#</th><th>Ward</th><th>Fast DC</th><th>Slow AC</th><th>Total kW</th><th>Demand</th>
+        </tr></thead>
+        <tbody>
+          ${design.map(d => `
+            <tr>
+              <td style="color:var(--gpu);font-weight:700">S${d.station}</td>
+              <td>${d.nearest_ward}</td>
+              <td><span class="tag fast">${d.fast_chargers} × 50kW</span></td>
+              <td><span class="tag slow">${d.slow_chargers} × 22kW</span></td>
+              <td style="color:var(--accent);font-weight:700">${d.total_kw} kW</td>
+              <td>${d.demand_kwh} kWh</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>`;
+
+  // Compare tab
+  document.getElementById('compare-content').innerHTML = `
+    <div class="compare-grid fade-in">
+      <div class="compare-cell">
+        <div class="c-label">CPU PSO Fitness</div>
+        <div class="c-val cpu">${metrics.fit_cpu.toFixed(5)}</div>
+      </div>
+      <div class="compare-cell">
+        <div class="c-label">CUDA PSO Fitness</div>
+        <div class="c-val gpu">${metrics.fit_cuda.toFixed(5)}</div>
+      </div>
+      <div class="compare-cell">
+        <div class="c-label">CPU Time</div>
+        <div class="c-val cpu">${metrics.t_cpu.toFixed(3)}s</div>
+      </div>
+      <div class="compare-cell">
+        <div class="c-label">CUDA Time</div>
+        <div class="c-val gpu">${metrics.t_cuda.toFixed(3)}s</div>
+      </div>
+      <div class="compare-cell">
+        <div class="c-label">Random Baseline</div>
+        <div class="c-val" style="color:var(--muted)">${metrics.fit_random.toFixed(5)}</div>
+      </div>
+      <div class="compare-cell">
+        <div class="c-label">Speedup</div>
+        <div class="c-val" style="color:var(--accent)">${metrics.speedup.toFixed(2)}×</div>
+      </div>
+      <div class="compare-cell" style="grid-column:1/-1">
+        <div class="c-label">CUDA vs Random Improvement</div>
+        <div class="c-val" style="color:var(--green)">
+          ${((metrics.fit_random - metrics.fit_cuda) / metrics.fit_random * 100).toFixed(2)}%
+        </div>
+      </div>
+    </div>`;
+
+  // Status
+  document.getElementById('status-pill').textContent = 'DONE';
+  document.getElementById('status-pill').style.color = 'var(--green)';
+  document.getElementById('status-pill').style.borderColor = 'var(--green)';
+}
+</script>
+</body>
+</html>

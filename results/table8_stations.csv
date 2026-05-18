@@ -1,0 +1,7 @@
+station,nearest_ward,lat,lon,fast_chargers,slow_chargers,total_kw,demand_kwh
+1,Malleshwaram,13.0035,77.57,5,2,294.0,8.06
+2,BTM Layout,12.9166,77.6101,4,4,288.0,6.59
+3,MG Road,12.975,77.6089,5,2,294.0,7.86
+4,Yeshwantpur,13.0214,77.5378,4,4,288.0,5.87
+5,Padmanabhanagar,12.935,77.536,4,4,288.0,6.14
+6,Baiyappanahalli,12.994,77.662,3,5,260.0,5.18
